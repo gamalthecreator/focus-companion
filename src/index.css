@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-[#121212] text-gray-200 font-sans antialiased;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.soft-border {
+  @apply border border-gray-800 rounded-xl;
+}
+
+.glass-panel {
+  @apply bg-gray-900/50 backdrop-blur-md border border-gray-800 rounded-2xl;
+}
+
+.input-focus {
+  @apply outline-none focus:ring-2 focus:ring-blue-500/50 transition-all;
+}

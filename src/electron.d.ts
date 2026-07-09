@@ -1,0 +1,62 @@
+export interface Task {
+  id: string;
+  text: string;
+  type: 'active' | 'pile' | 'lookup';
+  completed: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Setting {
+  key: string;
+  value: string;
+}
+
+export interface IElectronAPI {
+  // Task CRUD
+  getTasks: () => Promise<Task[]>;
+  addTask: (task: { id: string; text: string; type: string; createdAt: number }) => Promise<{ success: boolean }>;
+  updateTask: (id: string, updates: Partial<{ completed: boolean; updatedAt: number }>) => Promise<{ success: boolean }>;
+  deleteTask: (id: string) => Promise<{ success: boolean }>;
+  sendTask: (task: any) => void;
+
+  // Active task
+  setActiveTask: ({ id, text }: { id: string | null; text: string }) => Promise<{ success: boolean }>;
+  getActiveTask: () => Promise<{ id: string | null; text: string }>;
+
+  // Check-in
+  respondToCheckin: (action: string) => void;
+  triggerCheckin: () => void;
+
+  // Distraction recovery
+  respondToDistraction: (action: string) => Promise<{ success: boolean }>;
+
+  // Timer
+  onTimerTick: (callback: (seconds: number) => void) => void;
+  getTimerState: () => Promise<{ secondsLeft: number }>;
+
+  // Task updates from main
+  onTaskUpdated: (callback: () => void) => void;
+
+  // Analytics
+  exportAnalytics: () => Promise<{ success: boolean; path?: string }>;
+
+  // Stale tasks
+  getStaleTasks: () => Promise<Task[]>;
+  snoozeTask: (id: string) => Promise<{ success: boolean }>;
+
+  // Capture window
+  closeCapture: () => void;
+
+  // Settings
+  getSettings: () => Promise<Setting[]>;
+  setSetting: (key: string, value: string) => Promise<{ success: boolean }>;
+  onShortcutsChanged: (callback: () => void) => void;
+  shortcutsChanged: () => void;
+}
+
+declare global {
+  interface Window {
+    electron: IElectronAPI;
+  }
+}

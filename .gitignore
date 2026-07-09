@@ -1,0 +1,6 @@
+node_modules/
+dist/
+release/
+*.db
+focus-companion.json
+.DS_Store
