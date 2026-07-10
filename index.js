@@ -101,16 +101,15 @@ function startCheckinTimer() {
   setInterval(() => {
     if (currentActiveTaskId) {
       secondsUntilCheckin--;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('timer-tick', secondsUntilCheckin);
-      }
       if (secondsUntilCheckin <= 0) {
         console.log('Main: Timer reached 0, triggering check-in');
         createCheckinWindow();
         secondsUntilCheckin = 20 * 60;
       }
-    } else {
-      secondsUntilCheckin = 20 * 60;
+    }
+    // Always send tick so the UI never freezes
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('timer-tick', secondsUntilCheckin);
     }
   }, 1000);
 }
