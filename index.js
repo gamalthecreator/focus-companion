@@ -563,6 +563,8 @@ ipcMain.handle('distraction:respond', async (event, action, payload) => {
       timestamp: Date.now(),
       text,
       type: action === 'capture_lookup' ? 'lookup' : 'distraction',
+      taskId: currentActiveTaskId || undefined,
+      taskName: currentActiveTaskText || undefined,
     });
     saveData();
     if (action === 'capture_lookup') {

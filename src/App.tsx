@@ -32,6 +32,8 @@ interface DistractionLog {
   timestamp: number;
   text: string;
   type: 'lookup' | 'distraction';
+  taskId?: string;
+  taskName?: string;
 }
 
 interface ShortcutEntry {
@@ -990,6 +992,48 @@ const App: React.FC = () => {
           ) : (
             <p className="text-xs text-slate-600 italic text-center py-8">Not enough distraction data yet. Keep using the app to build your profile.</p>
           )}
+        </div>
+
+        {/* Distraction Timeline */}
+        <div className="glass-panel p-5 rounded-2xl space-y-3">
+          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Distraction Timeline (14 days)</h3>
+          {(() => {
+            const now = Date.now();
+            const dayMs = 86400000;
+            const days: { label: string; count: number; logs: DistractionLog[] }[] = [];
+            for (let i = 13; i >= 0; i--) {
+              const dayStart = new Date(now - i * dayMs);
+              dayStart.setHours(0, 0, 0, 0);
+              const dayEnd = dayStart.getTime() + dayMs;
+              const dayLogs = distractionLogs.filter(l => l.timestamp >= dayStart.getTime() && l.timestamp < dayEnd);
+              days.push({
+                label: dayStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                count: dayLogs.length,
+                logs: dayLogs,
+              });
+            }
+            const maxCount = Math.max(...days.map(d => d.count), 1);
+            const barW = plotW / 14;
+            return (
+              <svg viewBox={`0 0 ${chartW + 20} ${chartH + 10}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
+                {days.map((day, i) => {
+                  const barH = (day.count / maxCount) * plotH;
+                  const x = pad.l + i * barW;
+                  const y = pad.t + plotH - barH;
+                  return (
+                    <g key={i}>
+                      <rect x={x} y={y} width={Math.max(barW - 2, 3)} height={Math.max(barH, 0)} rx="2" className="fill-amber-500/40 hover:fill-amber-500/60 transition-colors cursor-pointer">
+                        <title>{day.count > 0 ? `${day.count} distraction${day.count > 1 ? 's' : ''}\n${day.logs.map(l => l.text + (l.taskName ? ` (during: ${l.taskName})` : '')).join('\n')}` : 'No distractions'}</title>
+                      </rect>
+                      {i % 2 === 0 && (
+                        <text x={x + barW / 2} y={chartH - 4} textAnchor="middle" className="fill-slate-600 text-[8px]">{day.label}</text>
+                      )}
+                    </g>
+                  );
+                })}
+              </svg>
+            );
+          })()}
         </div>
 
         {/* Distraction Breakdown */}

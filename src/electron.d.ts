@@ -35,6 +35,8 @@ export interface DistractionLog {
   timestamp: number;
   text: string;
   type: 'lookup' | 'distraction';
+  taskId?: string;
+  taskName?: string;
 }
 
 export interface IElectronAPI {
