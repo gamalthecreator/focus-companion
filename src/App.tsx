@@ -27,6 +27,13 @@ interface Interruption {
   choiceMade: 'return' | 'switch' | 'capture';
 }
 
+interface DistractionLog {
+  id: string;
+  timestamp: number;
+  text: string;
+  type: 'lookup' | 'distraction';
+}
+
 interface ShortcutEntry {
   id: string;
   name: string;
@@ -75,6 +82,7 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'tasks' | 'insights'>('tasks');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [interruptions, setInterruptions] = useState<Interruption[]>([]);
+  const [distractionLogs, setDistractionLogs] = useState<DistractionLog[]>([]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -115,6 +123,15 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const loadDistractionLogs = useCallback(async () => {
+    try {
+      const logs = await window.electron.getDistractionLogs();
+      setDistractionLogs(logs);
+    } catch (error) {
+      console.error('Failed to load distraction logs:', error);
+    }
+  }, []);
+
   const loadShortcuts = useCallback(async () => {
     try {
       const settings = await window.electron.getSettings();
@@ -132,7 +149,7 @@ const App: React.FC = () => {
   const getKeys = (id: string) => shortcuts.find(s => s.id === id)?.keys || '';
 
   useEffect(() => {
-    window.electron.onTaskUpdated(() => { loadTasks(); loadAnalytics(); });
+    window.electron.onTaskUpdated(() => { loadTasks(); loadAnalytics(); loadDistractionLogs(); });
     window.electron.onTimerTick((seconds: number) => setTimeLeft(seconds));
     window.electron.onShortcutsChanged(loadShortcuts);
 
@@ -140,11 +157,12 @@ const App: React.FC = () => {
     checkStaleTasks();
     loadShortcuts();
     loadAnalytics();
+    loadDistractionLogs();
 
     window.electron.getTimerState().then(state => {
       setTimeLeft(state.secondsLeft);
     });
-  }, [loadTasks, checkStaleTasks, loadShortcuts, loadAnalytics]);
+  }, [loadTasks, checkStaleTasks, loadShortcuts, loadAnalytics, loadDistractionLogs]);
 
   useEffect(() => {
     if (showSettings && settingsRef.current) {
@@ -971,6 +989,39 @@ const App: React.FC = () => {
             </>
           ) : (
             <p className="text-xs text-slate-600 italic text-center py-8">Not enough distraction data yet. Keep using the app to build your profile.</p>
+          )}
+        </div>
+
+        {/* Distraction Breakdown */}
+        <div className="glass-panel p-5 rounded-2xl space-y-3">
+          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Distraction Breakdown</h3>
+          {distractionLogs.length > 0 ? (
+            <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+              {(() => {
+                const grouped: Record<string, { count: number; lastSeen: number; type: string; text: string }> = {};
+                distractionLogs.forEach(log => {
+                  const key = log.text.toLowerCase().trim();
+                  if (!grouped[key]) grouped[key] = { count: 0, lastSeen: 0, type: log.type, text: log.text };
+                  grouped[key].count++;
+                  if (log.timestamp > grouped[key].lastSeen) grouped[key].lastSeen = log.timestamp;
+                });
+                const sorted = Object.values(grouped).sort((a, b) => b.count - a.count);
+                return sorted.map((entry, i) => (
+                  <div key={i} className="group flex items-center justify-between px-3 py-2 rounded-xl bg-slate-800/30 hover:bg-slate-800/60 transition-colors">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${entry.type === 'lookup' ? 'bg-violet-400' : 'bg-amber-400'}`} title={entry.type === 'lookup' ? 'Research Later' : 'Just Logged'}/>
+                      <span className="text-sm text-slate-300 truncate" title={`Last: ${new Date(entry.lastSeen).toLocaleString()}`}>{entry.text}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-[10px] font-mono text-slate-500">{entry.count}x</span>
+                      <span className="text-[10px] text-slate-600 hidden group-hover:inline">{entry.type === 'lookup' ? 'lookup' : 'log'}</span>
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-600 italic text-center py-4">No distractions logged yet. Use the capture option in the recovery popup to start tracking.</p>
           )}
         </div>
       </div>

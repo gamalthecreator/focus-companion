@@ -30,6 +30,13 @@ export interface Interruption {
   choiceMade: 'return' | 'switch' | 'capture';
 }
 
+export interface DistractionLog {
+  id: string;
+  timestamp: number;
+  text: string;
+  type: 'lookup' | 'distraction';
+}
+
 export interface IElectronAPI {
   // Task CRUD
   getTasks: () => Promise<Task[]>;
@@ -48,7 +55,7 @@ export interface IElectronAPI {
   triggerCheckin: () => void;
 
   // Distraction recovery
-  respondToDistraction: (action: string) => Promise<{ success: boolean }>;
+  respondToDistraction: (action: string, payload?: { text: string }) => Promise<{ success: boolean }>;
 
   // Timer
   onTimerTick: (callback: (seconds: number) => void) => void;
@@ -61,6 +68,7 @@ export interface IElectronAPI {
   exportAnalytics: () => Promise<{ success: boolean; path?: string }>;
   getSessions: () => Promise<Session[]>;
   getInterruptions: () => Promise<Interruption[]>;
+  getDistractionLogs: () => Promise<DistractionLog[]>;
 
   // Stale tasks
   getStaleTasks: () => Promise<Task[]>;

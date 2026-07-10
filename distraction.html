@@ -28,7 +28,7 @@
       flex-direction: column;
       align-items: center;
       text-align: center;
-      gap: 20px;
+      gap: 16px;
     }
     .label {
       color: #9ca3af;
@@ -72,20 +72,79 @@
     .btn-switch:hover { background: #6b7280; }
     .btn-capture { background: #2563eb; }
     .btn-capture:hover { background: #3b82f6; }
+    .btn-lookup { background: #7c3aed; }
+    .btn-lookup:hover { background: #8b5cf6; }
+    .btn-log { background: #d97706; }
+    .btn-log:hover { background: #f59e0b; }
+    .btn-cancel { background: #374151; }
+    .btn-cancel:hover { background: #4b5563; }
+    .capture-input {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(75, 85, 99, 0.5);
+      background: rgba(30, 41, 59, 0.8);
+      color: white;
+      font-size: 14px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+    .capture-input:focus {
+      border-color: #3b82f6;
+    }
+    .hidden { display: none; }
+    .fade-in {
+      animation: fadeIn 0.2s ease-in;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="label">Distraction Recovery</div>
-    <div class="message">No problem. What now?</div>
-    <div id="activeTaskDisplay" class="task-text"></div>
-    <div class="button-grid">
-      <button class="btn btn-return" onclick="respond('return')">Return to task — keep going</button>
-      <button class="btn btn-switch" onclick="respond('switch')">Switch to a different task</button>
-      <button class="btn btn-capture" onclick="respond('capture')">Capture what distracted me</button>
+
+    <!-- Initial view -->
+    <div id="initialView">
+      <div class="message">No problem. What now?</div>
+      <div id="activeTaskDisplay" class="task-text"></div>
+      <div class="button-grid">
+        <button class="btn btn-return" onclick="respond('return')">Return to task — keep going</button>
+        <button class="btn btn-switch" onclick="respond('switch')">Switch to a different task</button>
+        <button class="btn btn-capture" onclick="showCaptureForm()">Capture what distracted me</button>
+      </div>
+    </div>
+
+    <!-- Capture form (hidden initially) -->
+    <div id="captureView" class="hidden fade-in" style="width:100%;display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center;">
+      <div class="message">What distracted you?</div>
+      <input id="captureInput" class="capture-input" type="text" placeholder="Type what caught your attention..." autofocus>
+      <div class="button-grid">
+        <button class="btn btn-lookup" onclick="submitCapture('lookup')">Research Later — add to Look Up</button>
+        <button class="btn btn-log" onclick="submitCapture('log')">Just Log It — track in analytics</button>
+        <button class="btn btn-cancel" onclick="backToInitial()">Cancel</button>
+      </div>
     </div>
   </div>
   <script>
+    function showCaptureForm() {
+      document.getElementById('initialView').classList.add('hidden');
+      const captureView = document.getElementById('captureView');
+      captureView.classList.remove('hidden');
+      captureView.style.display = 'flex';
+      document.getElementById('captureInput').focus();
+    }
+
+    function backToInitial() {
+      document.getElementById('captureView').classList.add('hidden');
+      captureView.style.display = '';
+      document.getElementById('initialView').classList.remove('hidden');
+      document.getElementById('captureInput').value = '';
+    }
+
     async function loadTask() {
       const task = await window.electron.getActiveTask();
       const el = document.getElementById('activeTaskDisplay');
@@ -94,6 +153,18 @@
 
     async function respond(action) {
       await window.electron.respondToDistraction(action);
+    }
+
+    async function submitCapture(type) {
+      const text = document.getElementById('captureInput').value.trim();
+      if (!text) {
+        document.getElementById('captureInput').focus();
+        document.getElementById('captureInput').style.borderColor = '#ef4444';
+        setTimeout(() => document.getElementById('captureInput').style.borderColor = '', 1500);
+        return;
+      }
+      const action = type === 'lookup' ? 'capture_lookup' : 'capture_log';
+      await window.electron.respondToDistraction(action, { text });
     }
 
     loadTask();

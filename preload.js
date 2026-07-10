@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('electron', {
   triggerCheckin: () => ipcRenderer.send('checkin:manual-trigger'),
 
   // Distraction recovery
-  respondToDistraction: (action) => ipcRenderer.invoke('distraction:respond', action),
+  respondToDistraction: (action, payload) => ipcRenderer.invoke('distraction:respond', action, payload),
 
   // Timer
   onTimerTick: (callback) => ipcRenderer.on('timer-tick', (_event, value) => callback(value)),
@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('electron', {
   exportAnalytics: () => ipcRenderer.invoke('db:export-analytics'),
   getSessions: () => ipcRenderer.invoke('db:get-sessions'),
   getInterruptions: () => ipcRenderer.invoke('db:get-interruptions'),
+  getDistractionLogs: () => ipcRenderer.invoke('db:get-distraction-logs'),
 
   // Stale tasks
   getStaleTasks: () => ipcRenderer.invoke('db:get-stale-tasks'),

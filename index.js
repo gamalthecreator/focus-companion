@@ -58,10 +58,11 @@ function initData() {
   try {
     data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
   } catch {
-    data = { tasks: [], analytics: [], sessions: [], interruptions: [], settings: { ...DEFAULT_SHORTCUTS } };
+    data = { tasks: [], analytics: [], sessions: [], interruptions: [], distractionLogs: [], settings: { ...DEFAULT_SHORTCUTS } };
   }
   if (!data.sessions) data.sessions = [];
   if (!data.interruptions) data.interruptions = [];
+  if (!data.distractionLogs) data.distractionLogs = [];
 }
 
 function saveData() {
@@ -534,9 +535,9 @@ ipcMain.handle('db:restore-task', async (event, id) => {
   return { success: true };
 });
 
-ipcMain.handle('distraction:respond', async (event, action) => {
+ipcMain.handle('distraction:respond', async (event, action, payload) => {
   if (distractionWindow) distractionWindow.hide();
-  logInterruption(currentSessionId, action);
+  logInterruption(currentSessionId, typeof action === 'string' ? action : action?.action || 'capture');
 
   if (action === 'return') {
     if (mainWindow) mainWindow.webContents.send('task-updated');
@@ -555,8 +556,40 @@ ipcMain.handle('distraction:respond', async (event, action) => {
   } else if (action === 'capture') {
     createCaptureWindow();
     if (mainWindow) mainWindow.webContents.send('task-updated');
+  } else if (action === 'capture_lookup' || action === 'capture_log') {
+    const text = payload?.text || 'unknown distraction';
+    data.distractionLogs.push({
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      text,
+      type: action === 'capture_lookup' ? 'lookup' : 'distraction',
+    });
+    saveData();
+    if (action === 'capture_lookup') {
+      const lookupTask = {
+        id: crypto.randomUUID(),
+        text,
+        type: 'lookup',
+        createdAt: Date.now(),
+      };
+      data.tasks.push({
+        id: lookupTask.id,
+        text: lookupTask.text,
+        type: 'lookup',
+        completed: 0,
+        progress: 0,
+        createdAt: lookupTask.createdAt,
+        updatedAt: lookupTask.createdAt,
+      });
+      saveData();
+    }
+    if (mainWindow) mainWindow.webContents.send('task-updated');
   }
   resetCheckinTimer();
+});
+
+ipcMain.handle('db:get-distraction-logs', async () => {
+  return data.distractionLogs || [];
 });
 
 ipcMain.handle('db:get-timer-state', async () => {
