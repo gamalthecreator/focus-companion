@@ -75,6 +75,8 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'tasks' | 'insights'>('tasks');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [interruptions, setInterruptions] = useState<Interruption[]>([]);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
 
   const settingsRef = useRef<HTMLDivElement>(null);
 
@@ -152,7 +154,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (editingShortcut) return;
+      if (editingShortcut || editingTaskId) return;
 
       if (matchShortcut(e, getKeys('shortcut.localAddTask'))) {
         e.preventDefault();
@@ -182,7 +184,7 @@ const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tasks, inputValue, activeTaskId, shortcuts, showSettings, editingShortcut]);
+  }, [tasks, inputValue, activeTaskId, shortcuts, showSettings, editingShortcut, editingTaskId]);
 
   const addTask = async () => {
     if (!inputValue.trim()) return;
@@ -304,6 +306,23 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to restore task:', error);
+    }
+  };
+
+  const startEditTask = (id: string, text: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingTaskId(id);
+    setEditText(text);
+  };
+
+  const saveEditTask = async (id: string) => {
+    if (!editText.trim()) { setEditingTaskId(null); return; }
+    try {
+      await window.electron.updateTask(id, { text: editText, updatedAt: Date.now() });
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, text: editText } : t));
+      setEditingTaskId(null);
+    } catch (error) {
+      console.error('Failed to edit task:', error);
     }
   };
 
@@ -727,17 +746,32 @@ const App: React.FC = () => {
                   const num = i < numbered.length ? (i < 9 ? (i + 1).toString() : i === 9 ? '0' : null) : null;
                   const pct = task.progress ?? (task.completed ? 100 : 0);
                   return (
-                    <div key={task.id} onClick={() => setAsActive(task.id)}
-                      className={`group p-3 rounded-xl cursor-pointer transition-all border ${activeTaskId === task.id ? 'bg-blue-600/20 border-blue-500/50 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-800/40 border-transparent hover:border-slate-700 text-slate-400 hover:text-slate-200'} ${task.completed ? 'opacity-50' : ''}`}
+                    <div key={task.id} onClick={() => !editingTaskId && setAsActive(task.id)}
+                      className={`group p-3 rounded-xl transition-all border ${activeTaskId === task.id ? 'bg-blue-600/20 border-blue-500/50 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-800/40 border-transparent hover:border-slate-700 text-slate-400 hover:text-slate-200'} ${task.completed ? 'opacity-50' : ''} ${!editingTaskId ? 'cursor-pointer' : ''}`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         {num && <span className="flex-shrink-0 w-5 h-5 rounded-md bg-slate-700/60 text-slate-400 text-[11px] font-mono font-bold flex items-center justify-center">{num}</span>}
-                        <span className={`flex-1 min-w-0 truncate ${task.completed ? 'line-through' : ''}`}>{task.text}</span>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {editingTaskId === task.id ? (
+                          <input autoFocus value={editText} onChange={(e) => setEditText(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') saveEditTask(task.id); if (e.key === 'Escape') setEditingTaskId(null); }}
+                            onBlur={() => saveEditTask(task.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex-1 bg-slate-700/60 border border-slate-600 rounded-lg px-2 py-1 text-sm text-white outline-none focus:ring-1 focus:ring-blue-500/50"/>
+                        ) : (
+                          <span className={`flex-1 min-w-0 truncate ${task.completed ? 'line-through' : ''}`}>{task.text}</span>
+                        )}
+                        <div className="flex items-center gap-1 flex-shrink-0">
                           {!task.completed && pct < 100 && (
                             <span className="text-[10px] font-mono text-slate-500">{pct}%</span>
                           )}
-                          {task.completed ? (
+                          <button onClick={(e) => startEditTask(task.id, task.text, e)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-blue-800/40 text-slate-500 hover:text-blue-300"
+                            title="Edit task" aria-label="Edit task">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                          </button>
+                          {task.completed && (
                             <button onClick={(e) => restoreTask(task.id, e)}
                               className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-amber-800/40 text-slate-500 hover:text-amber-300"
                               title="Restore task (clear progress & sessions)" aria-label="Restore task">
@@ -745,20 +779,19 @@ const App: React.FC = () => {
                                 <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
                               </svg>
                             </button>
-                          ) : (
-                            <button onClick={(e) => deleteTask(task.id, e)}
-                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-red-900/40 text-slate-500 hover:text-red-300"
-                              title="Delete task" aria-label="Delete task">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                              </svg>
-                            </button>
                           )}
+                          <button onClick={(e) => deleteTask(task.id, e)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-red-900/40 text-slate-500 hover:text-red-300"
+                            title="Delete task" aria-label="Delete task">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                            </svg>
+                          </button>
                         </div>
                       </div>
                       {!task.completed && pct < 100 && (
-                        <div onClick={(e) => incrementProgress(task.id, e)}
-                          onContextMenu={(e) => decrementProgress(task.id, e)}
+                        <div onClick={(e) => !editingTaskId && incrementProgress(task.id, e)}
+                          onContextMenu={(e) => { e.preventDefault(); !editingTaskId && decrementProgress(task.id, e); }}
                           className="mt-1.5 h-1.5 w-full bg-slate-700/50 rounded-full overflow-hidden cursor-pointer group/progress hover:bg-slate-700/70 transition-colors"
                           title="Left-click to +25%, right-click to -25%">
                           <div className="h-full bg-emerald-500/60 rounded-full transition-all duration-300" style={{ width: `${pct}%` }}/>
