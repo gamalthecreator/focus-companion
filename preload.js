@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('electron', {
 
   // Analytics
   exportAnalytics: () => ipcRenderer.invoke('db:export-analytics'),
+  getSessions: () => ipcRenderer.invoke('db:get-sessions'),
+  getInterruptions: () => ipcRenderer.invoke('db:get-interruptions'),
 
   // Stale tasks
   getStaleTasks: () => ipcRenderer.invoke('db:get-stale-tasks'),

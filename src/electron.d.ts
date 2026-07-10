@@ -12,6 +12,23 @@ export interface Setting {
   value: string;
 }
 
+export interface Session {
+  id: string;
+  taskId: string;
+  taskName: string;
+  startTime: number;
+  endTime: number;
+  actualFocusMs: number;
+  endingStatus: 'completed' | 'distracted' | 'paused';
+}
+
+export interface Interruption {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  choiceMade: 'return' | 'switch' | 'capture';
+}
+
 export interface IElectronAPI {
   // Task CRUD
   getTasks: () => Promise<Task[]>;
@@ -40,6 +57,8 @@ export interface IElectronAPI {
 
   // Analytics
   exportAnalytics: () => Promise<{ success: boolean; path?: string }>;
+  getSessions: () => Promise<Session[]>;
+  getInterruptions: () => Promise<Interruption[]>;
 
   // Stale tasks
   getStaleTasks: () => Promise<Task[]>;

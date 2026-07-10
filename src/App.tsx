@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 interface Task {
   id: string;
@@ -7,6 +7,23 @@ interface Task {
   completed: number;
   createdAt: number;
   updatedAt: number;
+}
+
+interface Session {
+  id: string;
+  taskId: string;
+  taskName: string;
+  startTime: number;
+  endTime: number;
+  actualFocusMs: number;
+  endingStatus: 'completed' | 'distracted' | 'paused';
+}
+
+interface Interruption {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  choiceMade: 'return' | 'switch' | 'capture';
 }
 
 interface ShortcutEntry {
@@ -54,6 +71,10 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [editingShortcut, setEditingShortcut] = useState<string | null>(null);
 
+  const [activeTab, setActiveTab] = useState<'tasks' | 'insights'>('tasks');
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [interruptions, setInterruptions] = useState<Interruption[]>([]);
+
   const settingsRef = useRef<HTMLDivElement>(null);
 
   const activeTask = tasks.find(t => t.id === activeTaskId);
@@ -78,6 +99,19 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const [s, i] = await Promise.all([
+        window.electron.getSessions(),
+        window.electron.getInterruptions()
+      ]);
+      setSessions(s);
+      setInterruptions(i);
+    } catch (error) {
+      console.error('Failed to load analytics:', error);
+    }
+  }, []);
+
   const loadShortcuts = useCallback(async () => {
     try {
       const settings = await window.electron.getSettings();
@@ -95,18 +129,19 @@ const App: React.FC = () => {
   const getKeys = (id: string) => shortcuts.find(s => s.id === id)?.keys || '';
 
   useEffect(() => {
-    window.electron.onTaskUpdated(loadTasks);
+    window.electron.onTaskUpdated(() => { loadTasks(); loadAnalytics(); });
     window.electron.onTimerTick((seconds: number) => setTimeLeft(seconds));
     window.electron.onShortcutsChanged(loadShortcuts);
 
     loadTasks();
     checkStaleTasks();
     loadShortcuts();
+    loadAnalytics();
 
     window.electron.getTimerState().then(state => {
       setTimeLeft(state.secondsLeft);
     });
-  }, [loadTasks, checkStaleTasks, loadShortcuts]);
+  }, [loadTasks, checkStaleTasks, loadShortcuts, loadAnalytics]);
 
   useEffect(() => {
     if (showSettings && settingsRef.current) {
@@ -321,8 +356,115 @@ const App: React.FC = () => {
     }
   };
 
+  // ---- Analytics computations ----
+  const analyticsData = useMemo(() => {
+    const now = Date.now();
+    const dayMs = 86400000;
+
+    // Daily focus over last 30 days
+    const dailyFocus: { date: string; minutes: number }[] = [];
+    for (let i = 29; i >= 0; i--) {
+      const dayStart = new Date(now - i * dayMs);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = dayStart.getTime() + dayMs;
+      const totalMs = sessions
+        .filter(s => s.startTime >= dayStart.getTime() && s.startTime < dayEnd)
+        .reduce((sum, s) => sum + s.actualFocusMs, 0);
+      dailyFocus.push({ date: dayStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), minutes: Math.round(totalMs / 60000) });
+    }
+    const maxDailyMin = Math.max(...dailyFocus.map(d => d.minutes), 1);
+
+    // 7-day rolling moving average
+    const movingAvg = dailyFocus.map((_, i) => {
+      const slice = dailyFocus.slice(Math.max(0, i - 6), i + 1);
+      return slice.reduce((s, d) => s + d.minutes, 0) / slice.length;
+    });
+
+    // Hourly aggregation
+    const hourlyTotals = new Array(24).fill(0);
+    const hourlyCounts = new Array(24).fill(0);
+    sessions.forEach(s => {
+      const h = new Date(s.startTime).getHours();
+      hourlyTotals[h] += s.actualFocusMs;
+      hourlyCounts[h]++;
+    });
+    const maxHourlyMin = Math.max(...hourlyTotals.map(v => v), 1);
+
+    // Compute latency after distraction: for each distraction session, find next session start
+    const latencies: { hour: number; latencyMin: number }[] = [];
+    for (let i = 0; i < sessions.length - 1; i++) {
+      if (sessions[i].endingStatus === 'distracted') {
+        const nextSession = sessions.slice(i + 1).find(s => s.startTime > sessions[i].endTime);
+        if (nextSession) {
+          const latency = (nextSession.startTime - sessions[i].endTime) / 60000;
+          if (latency >= 0 && latency < 240) {
+            latencies.push({ hour: new Date(sessions[i].endTime).getHours(), latencyMin: Math.round(latency) });
+          }
+        }
+      }
+    }
+    const medianLatency = latencies.length > 0
+      ? latencies.map(l => l.latencyMin).sort((a, b) => a - b)[Math.floor(latencies.length / 2)]
+      : 0;
+
+    // KPIs
+    const totalInterruptions = interruptions.length;
+    const returnChoices = interruptions.filter(i => i.choiceMade === 'return').length;
+    const arr = totalInterruptions > 0 ? Math.round((returnChoices / totalInterruptions) * 100) : 0;
+
+    // Task Complexity Variance: correlate task name length with distracted sessions
+    const taskSessions: Record<string, { distracted: number; total: number }> = {};
+    sessions.forEach(s => {
+      if (!taskSessions[s.taskId]) taskSessions[s.taskId] = { distracted: 0, total: 0 };
+      taskSessions[s.taskId].total++;
+      if (s.endingStatus === 'distracted') taskSessions[s.taskId].distracted++;
+    });
+    const tasksWithData = tasks.filter(t => taskSessions[t.id]);
+    const distractionRates = tasksWithData.map(t => ({
+      length: t.text.length,
+      rate: (taskSessions[t.id]?.distracted || 0) / (taskSessions[t.id]?.total || 1),
+    }));
+    const avgShortRate = distractionRates.filter(d => d.length < 30).reduce((s, d) => s + d.rate, 0) / Math.max(distractionRates.filter(d => d.length < 30).length, 1);
+    const avgLongRate = distractionRates.filter(d => d.length >= 30).reduce((s, d) => s + d.rate, 0) / Math.max(distractionRates.filter(d => d.length >= 30).length, 1);
+    const taskVariance = distractionRates.length > 0 ? Math.round((avgLongRate - avgShortRate) * 100) : 0;
+
+    // AEI: total focus minutes / total runtime minutes
+    const totalFocusMin = sessions.reduce((s, sess) => s + sess.actualFocusMs, 0) / 60000;
+    const totalRuntimeMin = sessions
+      .filter(s => s.endTime > s.startTime)
+      .reduce((s, sess) => s + (sess.endTime - sess.startTime), 0) / 60000;
+    const aei = totalRuntimeMin > 0 ? Math.round((totalFocusMin / totalRuntimeMin) * 100) : 100;
+
+    return { dailyFocus, movingAvg, maxDailyMin, hourlyTotals, maxHourlyMin, latencies, medianLatency, arr, taskVariance, aei, totalInterruptions };
+  }, [sessions, interruptions, tasks]);
+
+  // ---- Time-based greeting ----
+  const greeting = (() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  })();
+
+  // ---- SVG chart dimensions ----
+  const chartW = 600;
+  const chartH = 180;
+  const pad = { t: 10, r: 10, b: 30, l: 40 };
+  const plotW = chartW - pad.l - pad.r;
+  const plotH = chartH - pad.t - pad.b;
+
+  // ---- SVG chart helpers ----
+  const linePath = (points: number[], maxVal: number) => {
+    if (points.length < 2) return '';
+    const xScale = (i: number) => pad.l + (i / Math.max(points.length - 1, 1)) * plotW;
+    const yScale = (v: number) => pad.t + plotH - (v / Math.max(maxVal, 1)) * plotH;
+    return points.map((v, i) => `${i === 0 ? 'M' : 'L'}${xScale(i)},${yScale(v)}`).join(' ');
+  };
+
+  const barWidth = plotW / 24;
+
   return (
-    <div className="h-screen flex flex-col p-6 space-y-8 overflow-hidden bg-[#0f172a] text-slate-200 font-sans">
+    <div className="h-screen flex flex-col p-6 space-y-6 overflow-hidden bg-[#0f172a] text-slate-200 font-sans">
       {/* Stale Task Review Modal */}
       {staleTasks.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -416,6 +558,20 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Tab Navigation */}
+      <div className="flex gap-1 bg-slate-800/50 rounded-2xl p-1 w-fit mx-auto">
+        <button onClick={() => setActiveTab('tasks')}
+          className={`px-5 py-2 text-sm font-medium rounded-xl transition-all ${activeTab === 'tasks' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:text-slate-200'}`}>
+          Tasks
+        </button>
+        <button onClick={() => setActiveTab('insights')}
+          className={`px-5 py-2 text-sm font-medium rounded-xl transition-all ${activeTab === 'insights' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:text-slate-200'}`}>
+          Data & Insights
+        </button>
+      </div>
+
+      {activeTab === 'tasks' && (
+      <>
       {/* Hero Section: The Current Task Loop */}
       <section className="glass-panel p-8 text-center space-y-6 transition-all animate-in fade-in slide-in-from-top-4 duration-700 relative overflow-hidden">
         <div className="relative z-10 space-y-4">
@@ -556,6 +712,134 @@ const App: React.FC = () => {
           </div>
         </section>
       </div>
+      </>
+      )}
+
+      {activeTab === 'insights' && (
+      <div className="flex-1 overflow-y-auto space-y-6 pr-1 custom-scrollbar">
+        {/* KPI Cards */}
+        <div className="grid grid-cols-3 gap-4">
+          <div className="glass-panel p-5 rounded-2xl space-y-2">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-slate-500 font-bold">
+              <svg className="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+              ARR
+            </div>
+            <div className="text-3xl font-light text-white">{analyticsData.arr}%</div>
+            <div className="text-[10px] text-slate-500 leading-tight" title="Attentional Resilience Rate: percentage of distraction events where you chose to return to your task">
+              {analyticsData.totalInterruptions > 0
+                ? `${analyticsData.arr}% of ${analyticsData.totalInterruptions} distraction events ended with a return to task`
+                : 'No interruption data yet'}
+            </div>
+          </div>
+          <div className="glass-panel p-5 rounded-2xl space-y-2">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-slate-500 font-bold">
+              <svg className="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              Task Variance
+            </div>
+            <div className="text-3xl font-light text-white">{analyticsData.taskVariance > 0 ? '+' : ''}{analyticsData.taskVariance}%</div>
+            <div className="text-[10px] text-slate-500 leading-tight" title="Difference in distraction rate between short tasks (&lt;30 chars) and long tasks (30+ chars)">
+              {analyticsData.taskVariance > 0 ? 'Longer tasks linked to higher distraction rate' : analyticsData.taskVariance < 0 ? 'Shorter tasks linked to higher distraction rate' : 'No correlation detected'}
+            </div>
+          </div>
+          <div className="glass-panel p-5 rounded-2xl space-y-2">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-slate-500 font-bold">
+              <svg className="w-3.5 h-3.5 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              AEI
+            </div>
+            <div className="text-3xl font-light text-white">{analyticsData.aei}%</div>
+            <div className="text-[10px] text-slate-500 leading-tight" title="Attentional Efficiency Index: focus minutes divided by total runtime minutes">
+              {analyticsData.aei}% of active session time was spent actually focused
+            </div>
+          </div>
+        </div>
+
+        {/* Chart: 7-Day Rolling Moving Average */}
+        <div className="glass-panel p-5 rounded-2xl space-y-3">
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Focus Trend (30 days)</h3>
+            <div className="flex gap-4 text-[10px] text-slate-600">
+              <span><span className="inline-block w-3 h-0.5 bg-blue-500/30 mr-1 align-middle"/>Daily</span>
+              <span><span className="inline-block w-3 h-0.5 bg-blue-400 mr-1 align-middle"/>7-day avg</span>
+            </div>
+          </div>
+          <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
+            {/* Y axis gridlines */}
+            {[0, 0.25, 0.5, 0.75, 1].map(pct => {
+              const y = pad.t + plotH - pct * plotH;
+              return (
+                <g key={pct}>
+                  <line x1={pad.l} y1={y} x2={chartW - pad.r} y2={y} stroke="#1e293b" strokeWidth="1"/>
+                  <text x={pad.l - 6} y={y + 3} textAnchor="end" className="fill-slate-600 text-[9px]">{Math.round(maxDailyMin * pct)}m</text>
+                </g>
+              );
+            })}
+            {/* Raw daily line */}
+            <path d={linePath(analyticsData.dailyFocus.map(d => d.minutes), analyticsData.maxDailyMin)} fill="none" stroke="#3b82f6" strokeOpacity="0.25" strokeWidth="1.5"/>
+            {/* 7-day MA line */}
+            <path d={linePath(analyticsData.movingAvg, analyticsData.maxDailyMin)} fill="none" stroke="#60a5fa" strokeWidth="2.5"/>
+            {/* X axis labels (every 5 days) */}
+            {analyticsData.dailyFocus.filter((_, i) => i % 5 === 0 || i === analyticsData.dailyFocus.length - 1).map((d, i, arr) => {
+              const idx = analyticsData.dailyFocus.indexOf(d);
+              const x = pad.l + (idx / Math.max(analyticsData.dailyFocus.length - 1, 1)) * plotW;
+              return <text key={i} x={x} y={chartH - 4} textAnchor="middle" className="fill-slate-600 text-[8px]">{d.date}</text>;
+            })}
+          </svg>
+        </div>
+
+        {/* Chart: Hourly Focus Distribution */}
+        <div className="glass-panel p-5 rounded-2xl space-y-3">
+          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Ultradian Attentional Density</h3>
+          <svg viewBox={`0 0 ${chartW + 20} ${chartH + 10}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
+            {analyticsData.hourlyTotals.map((total, hour) => {
+              const barH = (total / analyticsData.maxHourlyMin) * plotH;
+              const x = pad.l + hour * barWidth;
+              const y = pad.t + plotH - barH;
+              return (
+                <g key={hour}>
+                  <rect x={x} y={y} width={Math.max(barWidth - 1, 2)} height={Math.max(barH, 0)} rx="2" className="fill-blue-500/40 hover:fill-blue-500/60 transition-colors"/>
+                  {hour % 3 === 0 && (
+                    <text x={x + barWidth / 2} y={chartH - 4} textAnchor="middle" className="fill-slate-600 text-[8px]">{hour}</text>
+                  )}
+                </g>
+              );
+            })}
+            {/* Y axis label */}
+            <text x={8} y={pad.t + plotH / 2} textAnchor="middle" transform={`rotate(-90, 8, ${pad.t + plotH / 2})`} className="fill-slate-600 text-[9px]">focus (min)</text>
+          </svg>
+          <div className="text-[10px] text-slate-500 text-center">Hour of day (24h). Taller bars = your golden windows of peak focus.</div>
+        </div>
+
+        {/* Chart: Latency Scatter */}
+        <div className="glass-panel p-5 rounded-2xl space-y-3">
+          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Attentional Latency After Distraction</h3>
+          {analyticsData.latencies.length > 0 ? (
+            <>
+              <svg viewBox={`0 0 ${chartW + 20} ${chartH + 10}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
+                {analyticsData.latencies.map((pt, i) => {
+                  const x = pad.l + (pt.hour / 23) * plotW;
+                  const y = pad.t + plotH - (pt.latencyMin / Math.max(...analyticsData.latencies.map(l => l.latencyMin), 1)) * plotH;
+                  return <circle key={i} cx={x} cy={y} r="3" className="fill-amber-400/60 hover:fill-amber-400 transition-colors"/>;
+                })}
+                {/* Median line */}
+                {analyticsData.medianLatency > 0 && (
+                  <>
+                    <line x1={pad.l} y1={pad.t + plotH - (analyticsData.medianLatency / Math.max(...analyticsData.latencies.map(l => l.latencyMin), 1)) * plotH} x2={chartW - pad.r} y2={pad.t + plotH - (analyticsData.medianLatency / Math.max(...analyticsData.latencies.map(l => l.latencyMin), 1)) * plotH} stroke="#fbbf24" strokeWidth="1.5" strokeDasharray="4 3"/>
+                    <text x={chartW - pad.r} y={pad.t + plotH - (analyticsData.medianLatency / Math.max(...analyticsData.latencies.map(l => l.latencyMin), 1)) * plotH - 4} textAnchor="end" className="fill-amber-400 text-[9px]">median: {analyticsData.medianLatency}m</text>
+                  </>
+                )}
+                {/* X axis labels */}
+                {[0, 6, 12, 18, 23].map(h => (
+                  <text key={h} x={pad.l + (h / 23) * plotW} y={chartH - 4} textAnchor="middle" className="fill-slate-600 text-[8px]">{h}:00</text>
+                ))}
+              </svg>
+              <div className="text-[10px] text-slate-500 text-center">Each dot = one distraction. Y-axis = minutes to start a new focus session. Dashed line = median recovery time.</div>
+            </>
+          ) : (
+            <p className="text-xs text-slate-600 italic text-center py-8">Not enough distraction data yet. Keep using the app to build your profile.</p>
+          )}
+        </div>
+      </div>
+      )}
     </div>
   );
 };

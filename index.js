@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 let mainWindow;
 let captureWindow = null;
@@ -9,9 +10,11 @@ let distractionWindow = null;
 let tray = null;
 let data = null;
 let dataPath = null;
+let lockPath = null;
 let currentActiveTaskId = null;
 let currentActiveTaskText = '';
 let sessionStartTime = null;
+let currentSessionId = null;
 let secondsUntilCheckin = 20 * 60;
 
 const DEFAULT_SHORTCUTS = {
@@ -23,14 +26,42 @@ const DEFAULT_SHORTCUTS = {
   'shortcut.localEscape': 'Escape',
 };
 
+// Concurrency lock
+function acquireLock() {
+  lockPath = path.join(app.getPath('userData'), 'focus-companion.lock');
+  try {
+    if (fs.existsSync(lockPath)) {
+      const existing = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      const age = Date.now() - existing.timestamp;
+      if (age < 10000) {
+        console.error('Another instance appears to be running. Exiting.');
+        app.quit();
+        return false;
+      }
+    }
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, timestamp: Date.now(), id: crypto.randomUUID() }), 'utf8');
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function releaseLock() {
+  try {
+    if (lockPath && fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+  } catch {}
+}
+
 // JSON data storage
 function initData() {
   dataPath = path.join(app.getPath('userData'), 'focus-companion.json');
   try {
     data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
   } catch {
-    data = { tasks: [], analytics: [], settings: { ...DEFAULT_SHORTCUTS } };
+    data = { tasks: [], analytics: [], sessions: [], interruptions: [], settings: { ...DEFAULT_SHORTCUTS } };
   }
+  if (!data.sessions) data.sessions = [];
+  if (!data.interruptions) data.interruptions = [];
 }
 
 function saveData() {
@@ -39,6 +70,16 @@ function saveData() {
   } catch (err) {
     console.error('Error saving data:', err);
   }
+}
+
+function touchLock() {
+  try {
+    if (lockPath && fs.existsSync(lockPath)) {
+      const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      lock.timestamp = Date.now();
+      fs.writeFileSync(lockPath, JSON.stringify(lock), 'utf8');
+    }
+  } catch {}
 }
 
 function getTasks() {
@@ -212,9 +253,28 @@ function createWindow() {
 }
 
 // Helper to log time to analytics
-function logSession(taskId, start, end) {
+function logSession(taskId, taskName, start, end, status) {
   if (!taskId || !start || !end) return;
   data.analytics.push({ taskId, startTime: start, endTime: end });
+  data.sessions.push({
+    id: crypto.randomUUID(),
+    taskId,
+    taskName: taskName || '',
+    startTime: start,
+    endTime: end,
+    actualFocusMs: end - start,
+    endingStatus: status || 'paused',
+  });
+  saveData();
+}
+
+function logInterruption(sessionId, choice) {
+  data.interruptions.push({
+    id: crypto.randomUUID(),
+    sessionId: sessionId || '',
+    timestamp: Date.now(),
+    choiceMade: choice,
+  });
   saveData();
 }
 
@@ -247,35 +307,45 @@ ipcMain.handle('db:get-active-task', async () => {
 
 ipcMain.on('checkin:respond', async (event, action) => {
   if (checkinWindow) checkinWindow.hide();
+  const now = Date.now();
 
   if (action === 'done' && currentActiveTaskId) {
     const tasks = getTasks();
     const task = tasks.find(t => t.id === currentActiveTaskId);
     if (task) {
       task.completed = 1;
-      task.updatedAt = Date.now();
+      task.updatedAt = now;
       saveData();
     }
 
     if (sessionStartTime) {
-      logSession(currentActiveTaskId, sessionStartTime, Date.now());
+      logSession(currentActiveTaskId, currentActiveTaskText, sessionStartTime, now, 'completed');
     }
 
     currentActiveTaskId = null;
     currentActiveTaskText = '';
     sessionStartTime = null;
+    currentSessionId = null;
 
     if (mainWindow) mainWindow.webContents.send('task-updated');
   } else if (action === 'pause') {
     if (currentActiveTaskId && sessionStartTime) {
-      logSession(currentActiveTaskId, sessionStartTime, Date.now());
+      logSession(currentActiveTaskId, currentActiveTaskText, sessionStartTime, now, 'paused');
     }
     currentActiveTaskId = null;
     currentActiveTaskText = '';
     sessionStartTime = null;
+    currentSessionId = null;
     if (mainWindow) mainWindow.webContents.send('task-updated');
   } else if (action === 'distracted') {
     console.log('User reported distraction. Opening recovery window.');
+    if (currentActiveTaskId && sessionStartTime) {
+      logSession(currentActiveTaskId, currentActiveTaskText, sessionStartTime, now, 'distracted');
+    }
+    currentActiveTaskId = null;
+    currentActiveTaskText = '';
+    sessionStartTime = null;
+    currentSessionId = null;
     createDistractionWindow();
   }
 });
@@ -289,12 +359,13 @@ ipcMain.handle('db:set-active-task', async (event, { id, text }) => {
   const now = Date.now();
 
   if (currentActiveTaskId && sessionStartTime) {
-    logSession(currentActiveTaskId, sessionStartTime, now);
+    logSession(currentActiveTaskId, currentActiveTaskText, sessionStartTime, now, 'paused');
   }
 
   currentActiveTaskId = id;
-  currentActiveTaskText = text;
+  currentActiveTaskText = text || '';
   sessionStartTime = id ? now : null;
+  currentSessionId = id ? crypto.randomUUID() : null;
 
   if (id) {
     resetCheckinTimer();
@@ -363,16 +434,18 @@ ipcMain.handle('db:delete-task', async (event, id) => {
 
 ipcMain.handle('distraction:respond', async (event, action) => {
   if (distractionWindow) distractionWindow.hide();
+  logInterruption(currentSessionId, action);
 
   if (action === 'return') {
     if (mainWindow) mainWindow.webContents.send('task-updated');
   } else if (action === 'switch') {
     if (currentActiveTaskId && sessionStartTime) {
-      logSession(currentActiveTaskId, sessionStartTime, Date.now());
+      logSession(currentActiveTaskId, currentActiveTaskText, sessionStartTime, Date.now(), 'distracted');
     }
     currentActiveTaskId = null;
     currentActiveTaskText = '';
     sessionStartTime = null;
+    currentSessionId = null;
     if (mainWindow) {
       mainWindow.show();
       mainWindow.webContents.send('task-updated');
@@ -386,6 +459,14 @@ ipcMain.handle('distraction:respond', async (event, action) => {
 
 ipcMain.handle('db:get-timer-state', async () => {
   return { secondsLeft: secondsUntilCheckin };
+});
+
+ipcMain.handle('db:get-sessions', async () => {
+  return data.sessions || [];
+});
+
+ipcMain.handle('db:get-interruptions', async () => {
+  return data.interruptions || [];
 });
 
 ipcMain.handle('db:get-stale-tasks', async () => {
@@ -406,6 +487,7 @@ ipcMain.handle('db:snooze-task', async (event, id) => {
 });
 
 app.whenReady().then(() => {
+  if (!acquireLock()) return;
   initData();
   createWindow();
 
@@ -421,7 +503,13 @@ app.whenReady().then(() => {
 
   registerGlobalShortcuts();
 
+  setInterval(touchLock, 5000);
+
   startCheckinTimer();
+});
+
+app.on('before-quit', () => {
+  releaseLock();
 });
 
 app.on('will-quit', () => {
