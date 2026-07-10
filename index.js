@@ -314,6 +314,7 @@ ipcMain.on('checkin:respond', async (event, action) => {
     const task = tasks.find(t => t.id === currentActiveTaskId);
     if (task) {
       task.completed = 1;
+      task.progress = 100;
       task.updatedAt = now;
       saveData();
     }
@@ -394,6 +395,7 @@ ipcMain.handle('db:export-analytics', async () => {
       text: t.text,
       type: t.type,
       completed: !!t.completed,
+      progress: t.progress ?? (t.completed ? 100 : 0),
       createdAt: new Date(t.createdAt).toISOString(),
       updatedAt: new Date(t.updatedAt).toISOString(),
       sessions: sessions.filter(s => s.taskId === t.id).length,
@@ -439,7 +441,7 @@ ipcMain.handle('db:export-analytics', async () => {
 
   const tasksCsv = [
     '\n\n=== TASKS ===',
-    'TaskID,Text,Type,Completed,CreatedAt,UpdatedAt,SessionCount,TotalFocusMinutes',
+    'TaskID,Text,Type,Completed,Progress,CreatedAt,UpdatedAt,SessionCount,TotalFocusMinutes',
     ...tasks.map(t => {
       const taskSessions = sessions.filter(s => s.taskId === t.id);
       return [
@@ -447,6 +449,7 @@ ipcMain.handle('db:export-analytics', async () => {
         `"${(t.text || '').replace(/"/g, '""')}"`,
         t.type,
         t.completed ? 1 : 0,
+        t.progress ?? (t.completed ? 100 : 0),
         new Date(t.createdAt).toISOString(),
         new Date(t.updatedAt).toISOString(),
         taskSessions.length,
@@ -488,6 +491,7 @@ ipcMain.handle('db:add-task', async (event, task) => {
     text: task.text,
     type: task.type,
     completed: 0,
+    progress: 0,
     createdAt: task.createdAt,
     updatedAt: task.createdAt,
   });
@@ -553,7 +557,7 @@ ipcMain.handle('db:get-interruptions', async () => {
 ipcMain.handle('db:get-stale-tasks', async () => {
   const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
   const tasks = getTasks();
-  return tasks.filter(t => t.type === 'pile' && !t.completed && t.updatedAt < threeDaysAgo)
+  return tasks.filter(t => t.type === 'pile' && !t.completed && (t.progress ?? 0) < 100 && t.updatedAt < threeDaysAgo)
     .sort((a, b) => a.updatedAt - b.updatedAt);
 });
 

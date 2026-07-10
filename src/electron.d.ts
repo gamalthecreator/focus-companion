@@ -3,6 +3,7 @@ export interface Task {
   text: string;
   type: 'active' | 'pile' | 'lookup';
   completed: number;
+  progress: number;
   createdAt: number;
   updatedAt: number;
 }

@@ -5,6 +5,7 @@ interface Task {
   text: string;
   type: 'active' | 'pile' | 'lookup';
   completed: number;
+  progress: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -190,6 +191,7 @@ const App: React.FC = () => {
       text: inputValue,
       type: 'pile',
       completed: 0,
+      progress: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -228,12 +230,13 @@ const App: React.FC = () => {
     try {
       await window.electron.updateTask(activeTaskId, {
         completed: true,
+        progress: 100,
         updatedAt: Date.now()
       });
 
-      setTasks(prev => prev.map(t => t.id === activeTaskId ? { ...t, completed: 1 } : t));
+      setTasks(prev => prev.map(t => t.id === activeTaskId ? { ...t, completed: 1, progress: 100 } : t));
 
-      const updatedTasks = tasks.map(t => t.id === activeTaskId ? { ...t, completed: 1 } : t);
+      const updatedTasks = tasks.map(t => t.id === activeTaskId ? { ...t, completed: 1, progress: 100 } : t);
       const nextTask = updatedTasks.find(t => t.id !== activeTaskId && !t.completed && t.type === 'pile');
 
       const nextId = nextTask?.id || null;
@@ -244,6 +247,30 @@ const App: React.FC = () => {
       });
     } catch (error) {
       console.error('Failed to mark task as done:', error);
+    }
+  };
+
+  const incrementProgress = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+    const current = task.progress ?? 0;
+    const next = current >= 100 ? 0 : Math.min(current + 25, 100);
+    try {
+      await window.electron.updateTask(id, {
+        progress: next,
+        completed: next >= 100 ? 1 : 0,
+        updatedAt: Date.now()
+      });
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: next, completed: next >= 100 ? 1 : 0 } : t));
+      if (next >= 100 && activeTaskId === id) {
+        const remaining = tasks.filter(t => t.id !== id && !t.completed && t.type === 'pile');
+        const nextTask = remaining[0] || null;
+        setActiveTaskId(nextTask?.id || null);
+        await window.electron.setActiveTask({ id: nextTask?.id || null, text: nextTask?.text || '' });
+      }
+    } catch (error) {
+      console.error('Failed to update progress:', error);
     }
   };
 
@@ -428,6 +455,14 @@ const App: React.FC = () => {
     const avgLongRate = distractionRates.filter(d => d.length >= 30).reduce((s, d) => s + d.rate, 0) / Math.max(distractionRates.filter(d => d.length >= 30).length, 1);
     const taskVariance = distractionRates.length > 0 ? Math.round((avgLongRate - avgShortRate) * 100) : 0;
 
+    // Task completion rate
+    const pileTasks = tasks.filter(t => t.type === 'pile');
+    const avgProgress = pileTasks.length > 0
+      ? Math.round(pileTasks.reduce((s, t) => s + (t.progress ?? (t.completed ? 100 : 0)), 0) / pileTasks.length)
+      : 0;
+    const doneCount = pileTasks.filter(t => t.completed || (t.progress ?? 0) >= 100).length;
+    const completionRate = pileTasks.length > 0 ? Math.round((doneCount / pileTasks.length) * 100) : 0;
+
     // AEI: total focus minutes / total runtime minutes
     const totalFocusMin = sessions.reduce((s, sess) => s + sess.actualFocusMs, 0) / 60000;
     const totalRuntimeMin = sessions
@@ -435,7 +470,7 @@ const App: React.FC = () => {
       .reduce((s, sess) => s + (sess.endTime - sess.startTime), 0) / 60000;
     const aei = totalRuntimeMin > 0 ? Math.round((totalFocusMin / totalRuntimeMin) * 100) : 100;
 
-    return { dailyFocus, movingAvg, maxDailyMin, hourlyTotals, maxHourlyMin, latencies, medianLatency, arr, taskVariance, aei, totalInterruptions };
+    return { dailyFocus, movingAvg, maxDailyMin, hourlyTotals, maxHourlyMin, latencies, medianLatency, arr, taskVariance, aei, totalInterruptions, avgProgress, completionRate };
   }, [sessions, interruptions, tasks]);
 
   // ---- Time-based greeting ----
@@ -653,26 +688,37 @@ const App: React.FC = () => {
               <p className="text-xs text-slate-600 italic text-center py-4">Pile is empty.</p>
             ) : (
               (() => {
-                const numbered = tasks.filter(t => t.type === 'pile' && !t.completed);
+        const numbered = tasks.filter(t => t.type === 'pile' && !t.completed && (t.progress ?? 0) < 100);
                 const completed = tasks.filter(t => t.type === 'pile' && t.completed);
                 return [...numbered, ...completed].map((task, i) => {
                   const num = i < numbered.length ? (i < 9 ? (i + 1).toString() : i === 9 ? '0' : null) : null;
+                  const pct = task.progress ?? (task.completed ? 100 : 0);
                   return (
                     <div key={task.id} onClick={() => setAsActive(task.id)}
-                      className={`group p-3 rounded-xl cursor-pointer transition-all border flex justify-between items-start gap-2 ${activeTaskId === task.id ? 'bg-blue-600/20 border-blue-500/50 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-800/40 border-transparent hover:border-slate-700 text-slate-400 hover:text-slate-200'} ${task.completed ? 'opacity-40 line-through' : ''}`}
+                      className={`group p-3 rounded-xl cursor-pointer transition-all border ${activeTaskId === task.id ? 'bg-blue-600/20 border-blue-500/50 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-800/40 border-transparent hover:border-slate-700 text-slate-400 hover:text-slate-200'} ${task.completed ? 'opacity-40' : ''}`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         {num && <span className="flex-shrink-0 w-5 h-5 rounded-md bg-slate-700/60 text-slate-400 text-[11px] font-mono font-bold flex items-center justify-center">{num}</span>}
-                        <span className="flex-1 min-w-0 truncate">{task.text}</span>
+                        <span className={`flex-1 min-w-0 truncate ${task.completed ? 'line-through' : ''}`}>{task.text}</span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {!task.completed && (
+                            <span className="text-[10px] font-mono text-slate-500">{pct}%</span>
+                          )}
+                          <button onClick={(e) => deleteTask(task.id, e)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-red-900/40 text-slate-500 hover:text-red-300"
+                            title="Delete task" aria-label="Delete task">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                            </svg>
+                          </button>
+                        </div>
                       </div>
-                      <button onClick={(e) => deleteTask(task.id, e)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-red-900/40 text-slate-500 hover:text-red-300 flex-shrink-0"
-                        title="Delete task" aria-label="Delete task"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                        </svg>
-                      </button>
+                      {!task.completed && pct < 100 && (
+                        <div onClick={(e) => incrementProgress(task.id, e)}
+                          className="mt-1.5 h-1.5 w-full bg-slate-700/50 rounded-full overflow-hidden cursor-pointer group/progress hover:bg-slate-700/70 transition-colors">
+                          <div className="h-full bg-emerald-500/60 rounded-full transition-all duration-300" style={{ width: `${pct}%` }}/>
+                        </div>
+                      )}
                     </div>
                   );
                 });
@@ -719,7 +765,7 @@ const App: React.FC = () => {
       {activeTab === 'insights' && (
       <div className="flex-1 overflow-y-auto space-y-6 pr-1 custom-scrollbar">
         {/* KPI Cards */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-4 gap-4">
           <div className="glass-panel p-5 rounded-2xl space-y-2">
             <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-slate-500 font-bold">
               <svg className="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
@@ -750,6 +796,16 @@ const App: React.FC = () => {
             <div className="text-3xl font-light text-white">{analyticsData.aei}%</div>
             <div className="text-[10px] text-slate-500 leading-tight" title="Attentional Efficiency Index: focus minutes divided by total runtime minutes">
               {analyticsData.aei}% of active session time was spent actually focused
+            </div>
+          </div>
+          <div className="glass-panel p-5 rounded-2xl space-y-2">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-slate-500 font-bold">
+              <svg className="w-3.5 h-3.5 text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              Completion Rate
+            </div>
+            <div className="text-3xl font-light text-white">{analyticsData.completionRate}%</div>
+            <div className="text-[10px] text-slate-500 leading-tight" title="Percentage of all pile tasks that have been completed">
+              {analyticsData.avgProgress}% average progress across {tasks.filter(t => t.type === 'pile').length} tasks
             </div>
           </div>
         </div>
