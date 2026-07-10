@@ -770,7 +770,7 @@ const App: React.FC = () => {
               return (
                 <g key={pct}>
                   <line x1={pad.l} y1={y} x2={chartW - pad.r} y2={y} stroke="#1e293b" strokeWidth="1"/>
-                  <text x={pad.l - 6} y={y + 3} textAnchor="end" className="fill-slate-600 text-[9px]">{Math.round(maxDailyMin * pct)}m</text>
+                  <text x={pad.l - 6} y={y + 3} textAnchor="end" className="fill-slate-600 text-[9px]">{Math.round(analyticsData.maxDailyMin * pct)}m</text>
                 </g>
               );
             })}
