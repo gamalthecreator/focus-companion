@@ -517,6 +517,23 @@ ipcMain.handle('db:delete-task', async (event, id) => {
   return { success: true };
 });
 
+ipcMain.handle('db:restore-task', async (event, id) => {
+  const tasks = getTasks();
+  const task = tasks.find(t => t.id === id);
+  if (task) {
+    task.completed = 0;
+    task.progress = 0;
+    task.updatedAt = Date.now();
+    const sessionIds = data.sessions.filter(s => s.taskId === id).map(s => s.id);
+    data.sessions = data.sessions.filter(s => s.taskId !== id);
+    data.analytics = (data.analytics || []).filter(a => a.taskId !== id);
+    data.interruptions = data.interruptions.filter(i => !sessionIds.includes(i.sessionId));
+    saveData();
+  }
+  if (mainWindow) mainWindow.webContents.send('task-updated');
+  return { success: true };
+});
+
 ipcMain.handle('distraction:respond', async (event, action) => {
   if (distractionWindow) distractionWindow.hide();
   logInterruption(currentSessionId, action);

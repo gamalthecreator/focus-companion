@@ -36,6 +36,7 @@ export interface IElectronAPI {
   addTask: (task: { id: string; text: string; type: string; createdAt: number }) => Promise<{ success: boolean }>;
   updateTask: (id: string, updates: Partial<{ completed: boolean; updatedAt: number }>) => Promise<{ success: boolean }>;
   deleteTask: (id: string) => Promise<{ success: boolean }>;
+  restoreTask: (id: string) => Promise<{ success: boolean }>;
   sendTask: (task: any) => void;
 
   // Active task

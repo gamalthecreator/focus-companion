@@ -274,6 +274,39 @@ const App: React.FC = () => {
     }
   };
 
+  const decrementProgress = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+    const current = task.progress ?? 0;
+    const prev = current <= 0 ? 0 : Math.max(current - 25, 0);
+    try {
+      await window.electron.updateTask(id, {
+        progress: prev,
+        completed: 0,
+        updatedAt: Date.now()
+      });
+      setTasks(prevTasks => prevTasks.map(t => t.id === id ? { ...t, progress: prev, completed: 0 } : t));
+    } catch (error) {
+      console.error('Failed to decrement progress:', error);
+    }
+  };
+
+  const restoreTask = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await window.electron.restoreTask(id);
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: 0, completed: 0 } : t));
+      if (activeTaskId === id) {
+        setActiveTaskId(null);
+        await window.electron.setActiveTask({ id: null, text: '' });
+      }
+    } catch (error) {
+      console.error('Failed to restore task:', error);
+    }
+  };
+
   const setAsActive = async (id: string) => {
     setActiveTaskId(id);
     const task = tasks.find(t => t.id === id);
@@ -695,27 +728,39 @@ const App: React.FC = () => {
                   const pct = task.progress ?? (task.completed ? 100 : 0);
                   return (
                     <div key={task.id} onClick={() => setAsActive(task.id)}
-                      className={`group p-3 rounded-xl cursor-pointer transition-all border ${activeTaskId === task.id ? 'bg-blue-600/20 border-blue-500/50 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-800/40 border-transparent hover:border-slate-700 text-slate-400 hover:text-slate-200'} ${task.completed ? 'opacity-40' : ''}`}
+                      className={`group p-3 rounded-xl cursor-pointer transition-all border ${activeTaskId === task.id ? 'bg-blue-600/20 border-blue-500/50 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-800/40 border-transparent hover:border-slate-700 text-slate-400 hover:text-slate-200'} ${task.completed ? 'opacity-50' : ''}`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         {num && <span className="flex-shrink-0 w-5 h-5 rounded-md bg-slate-700/60 text-slate-400 text-[11px] font-mono font-bold flex items-center justify-center">{num}</span>}
                         <span className={`flex-1 min-w-0 truncate ${task.completed ? 'line-through' : ''}`}>{task.text}</span>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {!task.completed && (
+                          {!task.completed && pct < 100 && (
                             <span className="text-[10px] font-mono text-slate-500">{pct}%</span>
                           )}
-                          <button onClick={(e) => deleteTask(task.id, e)}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-red-900/40 text-slate-500 hover:text-red-300"
-                            title="Delete task" aria-label="Delete task">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                            </svg>
-                          </button>
+                          {task.completed ? (
+                            <button onClick={(e) => restoreTask(task.id, e)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-amber-800/40 text-slate-500 hover:text-amber-300"
+                              title="Restore task (clear progress & sessions)" aria-label="Restore task">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                              </svg>
+                            </button>
+                          ) : (
+                            <button onClick={(e) => deleteTask(task.id, e)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-red-900/40 text-slate-500 hover:text-red-300"
+                              title="Delete task" aria-label="Delete task">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                              </svg>
+                            </button>
+                          )}
                         </div>
                       </div>
                       {!task.completed && pct < 100 && (
                         <div onClick={(e) => incrementProgress(task.id, e)}
-                          className="mt-1.5 h-1.5 w-full bg-slate-700/50 rounded-full overflow-hidden cursor-pointer group/progress hover:bg-slate-700/70 transition-colors">
+                          onContextMenu={(e) => decrementProgress(task.id, e)}
+                          className="mt-1.5 h-1.5 w-full bg-slate-700/50 rounded-full overflow-hidden cursor-pointer group/progress hover:bg-slate-700/70 transition-colors"
+                          title="Left-click to +25%, right-click to -25%">
                           <div className="h-full bg-emerald-500/60 rounded-full transition-all duration-300" style={{ width: `${pct}%` }}/>
                         </div>
                       )}

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electron', {
   addTask: (task) => ipcRenderer.invoke('db:add-task', task),
   updateTask: (id, updates) => ipcRenderer.invoke('db:update-task', id, updates),
   deleteTask: (id) => ipcRenderer.invoke('db:delete-task', id),
+  restoreTask: (id) => ipcRenderer.invoke('db:restore-task', id),
   sendTask: (task) => ipcRenderer.send('add-task', task),
 
   // Active task
