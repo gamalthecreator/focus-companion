@@ -375,23 +375,104 @@ ipcMain.handle('db:set-active-task', async (event, { id, text }) => {
 });
 
 ipcMain.handle('db:export-analytics', async () => {
-  const rows = getAnalytics();
-  const csv = [
-    ['ID', 'TaskID', 'StartTime', 'EndTime'],
-    ...rows.map((r, i) => [i, r.taskId, new Date(r.startTime).toISOString(), r.endTime ? new Date(r.endTime).toISOString() : ''])
-  ].map(e => e.join(",")).join("\n");
+  const sessions = data.sessions || [];
+  const interruptions = data.interruptions || [];
+  const tasks = getTasks();
+
+  // Build a comprehensive JSON telemetry dump
+  const telemExport = {
+    exportedAt: new Date().toISOString(),
+    version: '1.0',
+    summary: {
+      totalSessions: sessions.length,
+      totalInterruptions: interruptions.length,
+      totalTasks: tasks.length,
+      totalFocusHours: Math.round(sessions.reduce((s, sess) => s + sess.actualFocusMs, 0) / 3600000 * 100) / 100,
+    },
+    tasks: tasks.map(t => ({
+      id: t.id,
+      text: t.text,
+      type: t.type,
+      completed: !!t.completed,
+      createdAt: new Date(t.createdAt).toISOString(),
+      updatedAt: new Date(t.updatedAt).toISOString(),
+      sessions: sessions.filter(s => s.taskId === t.id).length,
+      totalFocusMs: sessions.filter(s => s.taskId === t.id).reduce((sum, s) => sum + s.actualFocusMs, 0),
+    })),
+    sessions: sessions.map(s => ({
+      id: s.id,
+      taskId: s.taskId,
+      taskName: s.taskName,
+      startTime: new Date(s.startTime).toISOString(),
+      endTime: new Date(s.endTime).toISOString(),
+      actualFocusMs: s.actualFocusMs,
+      actualFocusMin: Math.round(s.actualFocusMs / 60000 * 100) / 100,
+      endingStatus: s.endingStatus,
+    })),
+    interruptions: interruptions.map(i => ({
+      id: i.id,
+      sessionId: i.sessionId,
+      timestamp: new Date(i.timestamp).toISOString(),
+      choiceMade: i.choiceMade,
+    })),
+  };
+
+  // Also build a multi-section CSV
+  const csvHeader = '# Focus Companion Telemetry Export\n';
+  const csvDate = `# Exported: ${new Date().toISOString()}\n\n`;
+
+  const sessionsCsv = [
+    '=== SESSIONS ===',
+    'SessionID,TaskID,TaskName,StartTime,EndTime,FocusMinutes,Status',
+    ...sessions.map(s =>
+      [s.id, s.taskId, `"${(s.taskName || '').replace(/"/g, '""')}"`, new Date(s.startTime).toISOString(), new Date(s.endTime).toISOString(), Math.round(s.actualFocusMs / 60000 * 100) / 100, s.endingStatus].join(',')
+    ),
+  ].join('\n');
+
+  const interruptionsCsv = [
+    '\n\n=== INTERRUPTIONS ===',
+    'InterruptionID,SessionID,Timestamp,Choice',
+    ...interruptions.map(i =>
+      [i.id, i.sessionId || '', new Date(i.timestamp).toISOString(), i.choiceMade].join(',')
+    ),
+  ].join('\n');
+
+  const tasksCsv = [
+    '\n\n=== TASKS ===',
+    'TaskID,Text,Type,Completed,CreatedAt,UpdatedAt,SessionCount,TotalFocusMinutes',
+    ...tasks.map(t => {
+      const taskSessions = sessions.filter(s => s.taskId === t.id);
+      return [
+        t.id,
+        `"${(t.text || '').replace(/"/g, '""')}"`,
+        t.type,
+        t.completed ? 1 : 0,
+        new Date(t.createdAt).toISOString(),
+        new Date(t.updatedAt).toISOString(),
+        taskSessions.length,
+        Math.round(taskSessions.reduce((s, sess) => s + sess.actualFocusMs, 0) / 60000 * 100) / 100,
+      ].join(',');
+    }),
+  ].join('\n');
+
+  const csvFull = csvHeader + csvDate + sessionsCsv + interruptionsCsv + tasksCsv;
 
   return dialog.showSaveDialog({
     title: 'Export Analytics',
-    defaultPath: 'focus-analytics.csv',
-    filters: [{ name: 'CSV', extensions: ['csv'] }]
+    defaultPath: 'focus-telemetry.json',
+    filters: [
+      { name: 'JSON Telemetry Dump', extensions: ['json'] },
+      { name: 'CSV (multi-section)', extensions: ['csv'] },
+    ]
   }).then(result => {
-    if (result.canceled) {
-      return { success: false };
+    if (result.canceled) return { success: false };
+    const ext = path.extname(result.filePath).toLowerCase();
+    if (ext === '.csv') {
+      fs.writeFileSync(result.filePath, csvFull, 'utf8');
     } else {
-      fs.writeFileSync(result.filePath, csv, 'utf8');
-      return { success: true, path: result.filePath };
+      fs.writeFileSync(result.filePath, JSON.stringify(telemExport, null, 2), 'utf8');
     }
+    return { success: true, path: result.filePath };
   });
 });
 

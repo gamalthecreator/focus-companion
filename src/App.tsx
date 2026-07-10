@@ -687,8 +687,9 @@ const App: React.FC = () => {
             <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Look Up Later</h3>
             <div className="flex gap-2">
               <button onClick={exportData}
-                className="text-[10px] uppercase tracking-widest text-slate-500 hover:text-white transition-colors font-bold">
-                Export CSV
+                className="text-[10px] uppercase tracking-widest text-slate-500 hover:text-white transition-colors font-bold"
+                title="Export JSON telemetry dump or multi-section CSV for external analysis">
+                Export Data
               </button>
             </div>
           </div>
