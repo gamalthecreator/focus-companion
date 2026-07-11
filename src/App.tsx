@@ -212,7 +212,7 @@ const App: React.FC = () => {
       id: crypto.randomUUID(),
       text: inputValue,
       type: 'pile',
-      completed: 0,
+      completed: false,
       progress: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -256,9 +256,9 @@ const App: React.FC = () => {
         updatedAt: Date.now()
       });
 
-      setTasks(prev => prev.map(t => t.id === activeTaskId ? { ...t, completed: 1, progress: 100 } : t));
+      setTasks(prev => prev.map(t => t.id === activeTaskId ? { ...t, completed: true, progress: 100 } : t));
 
-      const updatedTasks = tasks.map(t => t.id === activeTaskId ? { ...t, completed: 1, progress: 100 } : t);
+      const updatedTasks = tasks.map(t => t.id === activeTaskId ? { ...t, completed: true, progress: 100 } : t);
       const nextTask = updatedTasks.find(t => t.id !== activeTaskId && !t.completed && t.type === 'pile');
 
       const nextId = nextTask?.id || null;
@@ -281,10 +281,10 @@ const App: React.FC = () => {
     try {
       await window.electron.updateTask(id, {
         progress: next,
-        completed: next >= 100 ? 1 : 0,
+        completed: next >= 100 ? true : false,
         updatedAt: Date.now()
       });
-      setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: next, completed: next >= 100 ? 1 : 0 } : t));
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: next, completed: next >= 100 ? true : false } : t));
       if (next >= 100 && activeTaskId === id) {
         const remaining = tasks.filter(t => t.id !== id && !t.completed && t.type === 'pile');
         const nextTask = remaining[0] || null;
@@ -306,10 +306,10 @@ const App: React.FC = () => {
     try {
       await window.electron.updateTask(id, {
         progress: prev,
-        completed: 0,
+        completed: false,
         updatedAt: Date.now()
       });
-      setTasks(prevTasks => prevTasks.map(t => t.id === id ? { ...t, progress: prev, completed: 0 } : t));
+      setTasks(prevTasks => prevTasks.map(t => t.id === id ? { ...t, progress: prev, completed: false } : t));
     } catch (error) {
       console.error('Failed to decrement progress:', error);
     }
@@ -319,7 +319,7 @@ const App: React.FC = () => {
     e.stopPropagation();
     try {
       await window.electron.restoreTask(id);
-      setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: 0, completed: 0 } : t));
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: 0, completed: false } : t));
       if (activeTaskId === id) {
         setActiveTaskId(null);
         await window.electron.setActiveTask({ id: null, text: '' });
